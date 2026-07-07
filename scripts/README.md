@@ -1,5 +1,9 @@
 # Scripts
 
+## claude-langdock.sh
+
+A wrapper that launches Claude Code against Langdock's Anthropic-compatible endpoint, without affecting your normal `claude`. Run `scripts/claude-langdock.sh --help`, or see the "Using with Claude Code" section of the top-level [README](../README.md) for options and examples.
+
 ## check-upstream-models.ts
 
 This script fetches the list of available models from the Langdock API and generates a markdown report comparing them with the models configured in the extension.

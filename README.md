@@ -78,6 +78,62 @@ npm run check-upstream
 
 This creates `upstream-models-report.md`. The script uses the API key from `LANGDOCK_API_KEY` or `~/.pi/agent/auth.json`, and queries both the OpenAI and Anthropic `/models` endpoints.
 
+## Using with Claude Code
+
+This repo also ships `scripts/claude-langdock.sh`, a wrapper that launches
+[Claude Code](https://claude.com/claude-code) against Langdock's
+Anthropic-compatible endpoint using the Claude models above. It only sets
+environment variables for the process it spawns, so your normal `claude` (real
+Anthropic API) is unaffected — use plain `claude` for that, and this wrapper for
+Langdock.
+
+By default the API key is read from the `LANGDOCK_API_KEY` environment variable:
+
+```bash
+export LANGDOCK_API_KEY="your-api-key"
+scripts/claude-langdock.sh                     # interactive, main model = Opus 4.8
+```
+
+Any arguments after `--`, or any flags the wrapper doesn't recognize, are passed
+straight through to `claude`:
+
+```bash
+scripts/claude-langdock.sh -m sonnet -p "explain this repo"   # one-shot, Sonnet 4.6
+scripts/claude-langdock.sh --list-models                      # list workspace models
+scripts/claude-langdock.sh -- -c --verbose                    # resume last session
+```
+
+Options:
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-m`, `--model <id\|alias>` | Main model | `claude-opus-4-8-default` |
+| `-s`, `--small-model <id\|alias>` | Background/fast model | `claude-haiku-4-5-20251001` |
+| `-k`, `--key <key>` | API key literal | — |
+| `-f`, `--key-file <path>` | Read the API key from a file | — |
+| `-r`, `--region <eu\|us>` | Langdock region | `eu` |
+| `-l`, `--list-models` | List workspace models and exit | — |
+| `-h`, `--help` | Show help and exit | — |
+
+Model aliases: `opus`/`opus48`, `opus46`, `sonnet`/`sonnet46`, `haiku`/`haiku45`
+expand to the full `-default` IDs. Key resolution order is
+`--key` > `--key-file` > `$LANGDOCK_API_KEY` > `$LANGDOCK_KEY_FILE`.
+
+To run it from anywhere, symlink it onto your `PATH`:
+
+```bash
+ln -s "$PWD/scripts/claude-langdock.sh" ~/.local/bin/claude-langdock
+```
+
+Two caveats apply when using Claude Code (which, unlike the Pi extension, can't
+set per-model compat flags):
+
+- **Extended thinking** is unsupported on Opus 4.8/4.6 and Sonnet 4.6 (they
+  require adaptive thinking, which Claude Code can't force). Keep thinking off
+  with those models, or use Haiku 4.5 when you want thinking.
+- **`/v1/messages/count_tokens` returns 404** on Langdock, so Claude Code's
+  context metering may warn; the chat loop itself still works.
+
 ## Implementation Notes
 
 A few non-obvious quirks of the Langdock API that shape this extension's configuration (all verified against the live EU endpoints):
