@@ -4,7 +4,10 @@
  * Shows current rate limit usage for the Langdock API in the footer.
  * Langdock exposes per-minute request and token buckets via the standard
  * OpenAI-style x-ratelimit-*-requests / x-ratelimit-*-tokens response headers.
- * These are displayed alongside token usage.
+ * These are displayed alongside cumulative session token usage (Σ↑input
+ * ↓output), which accumulates across turns so you can gauge how much you've
+ * consumed. Note: Langdock exposes no cost/credit-balance API, so this is a
+ * token tally, not a dollar figure or a remaining-credit readout.
  *
  * This extension is automatically loaded when the package is installed.
  */
@@ -45,10 +48,18 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  function resetState() {
+  // Reset the per-minute rate-limit buckets (e.g. on compaction). Cumulative
+  // token totals are intentionally NOT cleared here: those tokens were really
+  // consumed, and the footer tracks them as session-wide usage.
+  function resetRateLimit() {
     state.remainingRequests = null;
     state.remainingTokensBucket = null;
     state.lastUpdate = 0;
+  }
+
+  // Full reset, including cumulative usage (e.g. on a fresh session).
+  function resetState() {
+    resetRateLimit();
     state.inputTokens = 0;
     state.outputTokens = 0;
   }
@@ -108,7 +119,8 @@ export default function (pi: ExtensionAPI) {
 
           // Don't show cost for Langdock (company account, free to the user)
           const contextStr = contextPct ? theme.fg("dim", `[${contextPct}]`) : "";
-          const tokenStr = theme.fg("dim", `↑${fmt(inputTokens)} ↓${fmt(outputTokens)}${contextStr ? " " + contextStr : ""}`);
+          // Σ marks these as cumulative session totals (not just the last turn).
+          const tokenStr = theme.fg("dim", `Σ↑${fmt(inputTokens)} ↓${fmt(outputTokens)}${contextStr ? " " + contextStr : ""}`);
           const rateLimitStr = rateLimitParts.length > 0 ? rateLimitParts.join(" ") : "";
           const branchStr = branch ? ` (${branch})` : "";
           const providerStr = isActive ? theme.fg("accent" as any, "(langdock)") : "";
@@ -156,8 +168,11 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (event.message.role === "assistant" && event.message.usage) {
-      state.inputTokens = event.message.usage.input || 0;
-      state.outputTokens = event.message.usage.output || 0;
+      // Accumulate across turns so the footer shows cumulative session usage
+      // (each turn's input already includes the full resent context, which is
+      // exactly what Langdock bills, so summing gives true tokens consumed).
+      state.inputTokens += event.message.usage.input || 0;
+      state.outputTokens += event.message.usage.output || 0;
       requestFooterRender();
     }
   });
@@ -167,9 +182,9 @@ export default function (pi: ExtensionAPI) {
     resetState();
   });
 
-  // Reset rate limits on compaction (new session state)
+  // Reset only the per-minute buckets on compaction; keep cumulative usage.
   pi.on("session_compact", async (_event: any, _ctx) => {
-    resetState();
+    resetRateLimit();
     requestFooterRender();
   });
 

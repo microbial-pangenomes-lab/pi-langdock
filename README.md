@@ -66,7 +66,9 @@ Because Langdock proxies real hosted backends (Azure OpenAI, Vertex Claude), the
 
 ## Rate Limit Footer
 
-The bundled `ratelimit-footer` extension shows Langdock's per-minute request and token usage (from the `x-ratelimit-*-requests` / `x-ratelimit-*-tokens` response headers) in the Pi footer whenever a Langdock model is active, alongside input/output token counts and context usage.
+The bundled `ratelimit-footer` extension shows Langdock's per-minute request and token usage (from the `x-ratelimit-*-requests` / `x-ratelimit-*-tokens` response headers) in the Pi footer whenever a Langdock model is active, alongside **cumulative session** token usage (`Σ↑input ↓output`, accumulated across turns) and context usage.
+
+> **Credit balance:** Langdock exposes no cost/credit API — there is no endpoint or response header that reports dollars spent or credit remaining (the only usage API, Usage Export, returns token counts, is historical, and needs a `USAGE_EXPORT_API` key scope). So the footer tracks **tokens consumed**, not a dollar figure; there is no way to read a key's remaining credit programmatically.
 
 ### Checking for Model Updates
 
