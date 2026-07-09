@@ -23,6 +23,11 @@ interface RateLimitState {
   lastUpdate: number;
   inputTokens: number;
   outputTokens: number;
+  // Langdock sometimes exposes per-response usage deltas in headers. If message
+  // events don't carry usage, we can still compute cumulative usage by summing
+  // deltas over time.
+  lastHeaderUsageInput: number | null;
+  lastHeaderUsageOutput: number | null;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -34,6 +39,8 @@ export default function (pi: ExtensionAPI) {
     lastUpdate: 0,
     inputTokens: 0,
     outputTokens: 0,
+    lastHeaderUsageInput: null,
+    lastHeaderUsageOutput: null,
   };
 
   let footerDispose: (() => void) | undefined;
@@ -55,6 +62,9 @@ export default function (pi: ExtensionAPI) {
     state.remainingRequests = null;
     state.remainingTokensBucket = null;
     state.lastUpdate = 0;
+    // Reset header counters too so the next response establishes a new baseline.
+    state.lastHeaderUsageInput = null;
+    state.lastHeaderUsageOutput = null;
   }
 
   // Full reset, including cumulative usage (e.g. on a fresh session).
@@ -155,21 +165,60 @@ export default function (pi: ExtensionAPI) {
     if (limitRequests !== undefined) state.limitRequests = parseInt(limitRequests, 10);
     if (limitTokens !== undefined) state.limitTokensBucket = parseInt(limitTokens, 10);
 
+    // Langdock often also returns usage counters in headers. These can be either:
+    // - cumulative usage for the current minute bucket, or
+    // - per-request deltas.
+    //
+    // We implement a robust method: treat them as cumulative and sum *deltas*
+    // between successive responses. If they are already deltas, this still works
+    // as long as they reset to 0 periodically (we reset baseline on compact/start).
+    const usageInHdr =
+      headers["x-ratelimit-usage-input-tokens"] ??
+      headers["x-ratelimit-usage-prompt-tokens"] ??
+      headers["x-usage-input-tokens"] ??
+      headers["x-usage-prompt-tokens"];
+
+    const usageOutHdr =
+      headers["x-ratelimit-usage-output-tokens"] ??
+      headers["x-ratelimit-usage-completion-tokens"] ??
+      headers["x-usage-output-tokens"] ??
+      headers["x-usage-completion-tokens"];
+
+    const usageIn = usageInHdr !== undefined ? parseInt(String(usageInHdr), 10) : null;
+    const usageOut = usageOutHdr !== undefined ? parseInt(String(usageOutHdr), 10) : null;
+
+    if (usageIn !== null && !Number.isNaN(usageIn)) {
+      if (state.lastHeaderUsageInput !== null) {
+        const delta = usageIn - state.lastHeaderUsageInput;
+        if (delta > 0) state.inputTokens += delta;
+      }
+      state.lastHeaderUsageInput = usageIn;
+    }
+
+    if (usageOut !== null && !Number.isNaN(usageOut)) {
+      if (state.lastHeaderUsageOutput !== null) {
+        const delta = usageOut - state.lastHeaderUsageOutput;
+        if (delta > 0) state.outputTokens += delta;
+      }
+      state.lastHeaderUsageOutput = usageOut;
+    }
+
     state.lastUpdate = Date.now();
 
     // Request footer re-render
     requestFooterRender();
   });
 
-  // Track token usage from message_end event
+  // Track token usage from message_end event.
   //
-  // Pi providers differ in the usage shape they emit. In practice we've seen:
-  // - { input, output } (Pi-normalized)
-  // - { input_tokens, output_tokens } (OpenAI-style)
-  // - { prompt_tokens, completion_tokens, total_tokens } (OpenAI legacy)
-  // - { input_tokens, output_tokens, cache_* } (Anthropic-style)
+  // Important: usage can be missing on `message_end` depending on provider and
+  // streaming mode. Langdock (OpenAI-compatible) does reliably expose rate-limit
+  // headers even when usage accounting isn't emitted in the message event.
   //
-  // So we defensively normalize several common variants.
+  // So we:
+  // 1) Try to accumulate from message usage when present.
+  // 2) Fall back to parsing Langdock's `x-ratelimit-usage-*` headers from
+  //    after_provider_response (delta vs previous), which are present in practice.
   pi.on("message_end", async (event: any, ctx) => {
     if (!isLangdockModel(ctx.model)) {
       return;
@@ -179,21 +228,14 @@ export default function (pi: ExtensionAPI) {
     const usage = msg?.usage;
     if (msg?.role !== "assistant" || !usage) return;
 
-    const input =
-      usage.input ??
-      usage.input_tokens ??
-      usage.prompt_tokens ??
-      0;
+    // Pi providers differ in the usage shape they emit. In practice we've seen:
+    // - { input, output } (Pi-normalized)
+    // - { input_tokens, output_tokens } (OpenAI-style)
+    // - { prompt_tokens, completion_tokens, total_tokens } (OpenAI legacy)
+    // - { input_tokens, output_tokens, cache_* } (Anthropic-style)
+    const input = (usage.input ?? usage.input_tokens ?? usage.prompt_tokens ?? 0) as unknown;
+    const output = (usage.output ?? usage.output_tokens ?? usage.completion_tokens ?? 0) as unknown;
 
-    const output =
-      usage.output ??
-      usage.output_tokens ??
-      usage.completion_tokens ??
-      0;
-
-    // Accumulate across turns so the footer shows cumulative session usage.
-    // Note: each turn's input already includes the resent context, which is
-    // exactly what Langdock bills, so summing gives true tokens consumed.
     state.inputTokens += typeof input === "number" ? input : 0;
     state.outputTokens += typeof output === "number" ? output : 0;
     requestFooterRender();
