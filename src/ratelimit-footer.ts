@@ -4,10 +4,7 @@
  * Shows current rate limit usage for the Langdock API in the footer.
  * Langdock exposes per-minute request and token buckets via the standard
  * OpenAI-style x-ratelimit-*-requests / x-ratelimit-*-tokens response headers.
- * These are displayed alongside cumulative session token usage (Σ↑input
- * ↓output), which accumulates across turns so you can gauge how much you've
- * consumed. Note: Langdock exposes no cost/credit-balance API, so this is a
- * token tally, not a dollar figure or a remaining-credit readout.
+ * These are displayed alongside token usage.
  *
  * This extension is automatically loaded when the package is installed.
  */
@@ -23,11 +20,6 @@ interface RateLimitState {
   lastUpdate: number;
   inputTokens: number;
   outputTokens: number;
-  // Langdock sometimes exposes per-response usage deltas in headers. If message
-  // events don't carry usage, we can still compute cumulative usage by summing
-  // deltas over time.
-  lastHeaderUsageInput: number | null;
-  lastHeaderUsageOutput: number | null;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -39,8 +31,6 @@ export default function (pi: ExtensionAPI) {
     lastUpdate: 0,
     inputTokens: 0,
     outputTokens: 0,
-    lastHeaderUsageInput: null,
-    lastHeaderUsageOutput: null,
   };
 
   let footerDispose: (() => void) | undefined;
@@ -55,21 +45,10 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  // Reset the per-minute rate-limit buckets (e.g. on compaction). Cumulative
-  // token totals are intentionally NOT cleared here: those tokens were really
-  // consumed, and the footer tracks them as session-wide usage.
-  function resetRateLimit() {
+  function resetState() {
     state.remainingRequests = null;
     state.remainingTokensBucket = null;
     state.lastUpdate = 0;
-    // Reset header counters too so the next response establishes a new baseline.
-    state.lastHeaderUsageInput = null;
-    state.lastHeaderUsageOutput = null;
-  }
-
-  // Full reset, including cumulative usage (e.g. on a fresh session).
-  function resetState() {
-    resetRateLimit();
     state.inputTokens = 0;
     state.outputTokens = 0;
   }
@@ -129,8 +108,7 @@ export default function (pi: ExtensionAPI) {
 
           // Don't show cost for Langdock (company account, free to the user)
           const contextStr = contextPct ? theme.fg("dim", `[${contextPct}]`) : "";
-          // Σ marks these as cumulative session totals (not just the last turn).
-          const tokenStr = theme.fg("dim", `Σ↑${fmt(inputTokens)} ↓${fmt(outputTokens)}${contextStr ? " " + contextStr : ""}`);
+          const tokenStr = theme.fg("dim", `↑${fmt(inputTokens)} ↓${fmt(outputTokens)}${contextStr ? " " + contextStr : ""}`);
           const rateLimitStr = rateLimitParts.length > 0 ? rateLimitParts.join(" ") : "";
           const branchStr = branch ? ` (${branch})` : "";
           const providerStr = isActive ? theme.fg("accent" as any, "(langdock)") : "";
@@ -165,80 +143,23 @@ export default function (pi: ExtensionAPI) {
     if (limitRequests !== undefined) state.limitRequests = parseInt(limitRequests, 10);
     if (limitTokens !== undefined) state.limitTokensBucket = parseInt(limitTokens, 10);
 
-    // Langdock often also returns usage counters in headers. These can be either:
-    // - cumulative usage for the current minute bucket, or
-    // - per-request deltas.
-    //
-    // We implement a robust method: treat them as cumulative and sum *deltas*
-    // between successive responses. If they are already deltas, this still works
-    // as long as they reset to 0 periodically (we reset baseline on compact/start).
-    const usageInHdr =
-      headers["x-ratelimit-usage-input-tokens"] ??
-      headers["x-ratelimit-usage-prompt-tokens"] ??
-      headers["x-usage-input-tokens"] ??
-      headers["x-usage-prompt-tokens"];
-
-    const usageOutHdr =
-      headers["x-ratelimit-usage-output-tokens"] ??
-      headers["x-ratelimit-usage-completion-tokens"] ??
-      headers["x-usage-output-tokens"] ??
-      headers["x-usage-completion-tokens"];
-
-    const usageIn = usageInHdr !== undefined ? parseInt(String(usageInHdr), 10) : null;
-    const usageOut = usageOutHdr !== undefined ? parseInt(String(usageOutHdr), 10) : null;
-
-    if (usageIn !== null && !Number.isNaN(usageIn)) {
-      if (state.lastHeaderUsageInput !== null) {
-        const delta = usageIn - state.lastHeaderUsageInput;
-        if (delta > 0) state.inputTokens += delta;
-      }
-      state.lastHeaderUsageInput = usageIn;
-    }
-
-    if (usageOut !== null && !Number.isNaN(usageOut)) {
-      if (state.lastHeaderUsageOutput !== null) {
-        const delta = usageOut - state.lastHeaderUsageOutput;
-        if (delta > 0) state.outputTokens += delta;
-      }
-      state.lastHeaderUsageOutput = usageOut;
-    }
-
     state.lastUpdate = Date.now();
 
     // Request footer re-render
     requestFooterRender();
   });
 
-  // Track token usage from message_end event.
-  //
-  // Important: usage can be missing on `message_end` depending on provider and
-  // streaming mode. Langdock (OpenAI-compatible) does reliably expose rate-limit
-  // headers even when usage accounting isn't emitted in the message event.
-  //
-  // So we:
-  // 1) Try to accumulate from message usage when present.
-  // 2) Fall back to parsing Langdock's `x-ratelimit-usage-*` headers from
-  //    after_provider_response (delta vs previous), which are present in practice.
+  // Track token usage from message_end event
   pi.on("message_end", async (event: any, ctx) => {
     if (!isLangdockModel(ctx.model)) {
       return;
     }
 
-    const msg = event?.message;
-    const usage = msg?.usage;
-    if (msg?.role !== "assistant" || !usage) return;
-
-    // Pi providers differ in the usage shape they emit. In practice we've seen:
-    // - { input, output } (Pi-normalized)
-    // - { input_tokens, output_tokens } (OpenAI-style)
-    // - { prompt_tokens, completion_tokens, total_tokens } (OpenAI legacy)
-    // - { input_tokens, output_tokens, cache_* } (Anthropic-style)
-    const input = (usage.input ?? usage.input_tokens ?? usage.prompt_tokens ?? 0) as unknown;
-    const output = (usage.output ?? usage.output_tokens ?? usage.completion_tokens ?? 0) as unknown;
-
-    state.inputTokens += typeof input === "number" ? input : 0;
-    state.outputTokens += typeof output === "number" ? output : 0;
-    requestFooterRender();
+    if (event.message.role === "assistant" && event.message.usage) {
+      state.inputTokens = event.message.usage.input || 0;
+      state.outputTokens = event.message.usage.output || 0;
+      requestFooterRender();
+    }
   });
 
   // Reset state on session start
@@ -246,9 +167,9 @@ export default function (pi: ExtensionAPI) {
     resetState();
   });
 
-  // Reset only the per-minute buckets on compaction; keep cumulative usage.
+  // Reset rate limits on compaction (new session state)
   pi.on("session_compact", async (_event: any, _ctx) => {
-    resetRateLimit();
+    resetState();
     requestFooterRender();
   });
 
