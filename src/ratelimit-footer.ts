@@ -162,19 +162,41 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Track token usage from message_end event
+  //
+  // Pi providers differ in the usage shape they emit. In practice we've seen:
+  // - { input, output } (Pi-normalized)
+  // - { input_tokens, output_tokens } (OpenAI-style)
+  // - { prompt_tokens, completion_tokens, total_tokens } (OpenAI legacy)
+  // - { input_tokens, output_tokens, cache_* } (Anthropic-style)
+  //
+  // So we defensively normalize several common variants.
   pi.on("message_end", async (event: any, ctx) => {
     if (!isLangdockModel(ctx.model)) {
       return;
     }
 
-    if (event.message.role === "assistant" && event.message.usage) {
-      // Accumulate across turns so the footer shows cumulative session usage
-      // (each turn's input already includes the full resent context, which is
-      // exactly what Langdock bills, so summing gives true tokens consumed).
-      state.inputTokens += event.message.usage.input || 0;
-      state.outputTokens += event.message.usage.output || 0;
-      requestFooterRender();
-    }
+    const msg = event?.message;
+    const usage = msg?.usage;
+    if (msg?.role !== "assistant" || !usage) return;
+
+    const input =
+      usage.input ??
+      usage.input_tokens ??
+      usage.prompt_tokens ??
+      0;
+
+    const output =
+      usage.output ??
+      usage.output_tokens ??
+      usage.completion_tokens ??
+      0;
+
+    // Accumulate across turns so the footer shows cumulative session usage.
+    // Note: each turn's input already includes the resent context, which is
+    // exactly what Langdock bills, so summing gives true tokens consumed.
+    state.inputTokens += typeof input === "number" ? input : 0;
+    state.outputTokens += typeof output === "number" ? output : 0;
+    requestFooterRender();
   });
 
   // Reset state on session start
