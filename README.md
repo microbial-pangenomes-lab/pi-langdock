@@ -48,6 +48,9 @@ Because Langdock proxies real hosted backends (Azure OpenAI, Vertex Claude), the
 
 `langdock` (OpenAI-compatible):
 
+- GPT-5.6 Sol
+- GPT-5.6 Terra
+- GPT-5.6 Luna
 - GPT-5.5
 - GPT-5.4
 - GPT-5.4 Mini
