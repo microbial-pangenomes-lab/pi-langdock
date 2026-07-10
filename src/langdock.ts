@@ -26,6 +26,36 @@ const openaiCompat = {
   supportsReasoningEffort: false,
 };
 
+// The GPT-5.6 models (sol/terra/luna) invert the older-model quirk above.
+// Instead of rejecting `reasoning_effort` alongside tools, they *default* to a
+// non-"none" effort server-side and then reject function tools unless
+// `reasoning_effort: "none"` is sent explicitly:
+//   "400 Function tools with reasoning_effort are not supported for gpt-5.6-*
+//    ... To use function tools, use /v1/responses or set reasoning_effort to
+//    'none'."
+// Since Pi always sends tools, we must force "none" on every request. So we
+// *enable* reasoning_effort here (unlike openaiCompat) and pin every pi thinking
+// level to "none" via `thinkingLevelMap56` on each model. Consequence: these
+// models can't actually reason while tools are present on /v1/chat/completions
+// (that would need /v1/responses), which is fine for a tool-driven coding agent.
+const openaiCompat56 = {
+  maxTokensField: "max_completion_tokens" as const,
+  supportsUsageInStreaming: false,
+  supportsReasoningEffort: true,
+};
+
+// Map every pi thinking level (including "off") to "none" so the request always
+// carries reasoning_effort: "none" — the only value the 5.6 models accept with
+// tools present.
+const thinkingLevelMap56 = {
+  off: "none",
+  minimal: "none",
+  low: "none",
+  medium: "none",
+  high: "none",
+  xhigh: "none",
+} as const;
+
 // The Claude 4.6/4.8-generation models on Langdock (Vertex) reject the classic
 // `thinking: { type: "enabled" }` block and require adaptive thinking instead.
 const anthropicAdaptiveCompat = {
@@ -50,7 +80,8 @@ export default function (pi: ExtensionAPI) {
         cost: zeroCost,
         contextWindow: 272000,
         maxTokens: 16384,
-        compat: openaiCompat,
+        compat: openaiCompat56,
+        thinkingLevelMap: thinkingLevelMap56,
       },
       {
         id: "gpt-5.6-terra",
@@ -60,7 +91,8 @@ export default function (pi: ExtensionAPI) {
         cost: zeroCost,
         contextWindow: 272000,
         maxTokens: 16384,
-        compat: openaiCompat,
+        compat: openaiCompat56,
+        thinkingLevelMap: thinkingLevelMap56,
       },
       {
         id: "gpt-5.6-luna",
@@ -70,7 +102,8 @@ export default function (pi: ExtensionAPI) {
         cost: zeroCost,
         contextWindow: 272000,
         maxTokens: 16384,
-        compat: openaiCompat,
+        compat: openaiCompat56,
+        thinkingLevelMap: thinkingLevelMap56,
       },
       {
         id: "gpt-5.5",
