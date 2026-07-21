@@ -62,6 +62,7 @@ Because Langdock proxies real hosted backends (Azure OpenAI, Vertex Claude), the
 
 `langdock-anthropic` (Anthropic-compatible):
 
+- Claude Sonnet 5
 - Claude Opus 4.8
 - Claude Sonnet 4.6
 - Claude Opus 4.6
@@ -147,7 +148,7 @@ A few non-obvious quirks of the Langdock API that shape this extension's configu
 - **Anthropic base URL omits `/v1`:** The `langdock-anthropic` base URL is `https://api.langdock.com/anthropic/eu` (no trailing `/v1`), because the Anthropic SDK appends `/v1/messages` itself. Including `/v1` yields a 404. The OpenAI base URL, by contrast, keeps its `/v1`.
 - **OpenAI `reasoning_effort` breaks tool calls (GPT-5.2–5.5):** The OpenAI-compatible endpoint returns HTTP 400 when `reasoning_effort` is sent alongside `tools` (it's fine without tools). These GPT models therefore set `compat.supportsReasoningEffort: false` so Pi never sends it; they still reason at their default effort. That endpoint also uses `max_completion_tokens` and rejects `stream_options` (`supportsUsageInStreaming: false`).
 - **GPT-5.6 (Sol/Terra/Luna) invert that quirk:** these models *default* to a non-`none` reasoning effort server-side and then reject function tools unless `reasoning_effort: "none"` is sent explicitly (`400 Function tools with reasoning_effort are not supported … set reasoning_effort to 'none'`). Because Pi always sends tools, they must send `reasoning_effort: "none"` on every request. They therefore set `compat.supportsReasoningEffort: true` and a `thinkingLevelMap` that pins every thinking level to `"none"`. The trade-off is that these models can't reason while tools are present on `/v1/chat/completions` (that would require `/v1/responses`), which is fine for a tool-driven coding agent.
-- **Newer Claude models need adaptive thinking:** Claude Opus 4.8, Opus 4.6, and Sonnet 4.6 reject the classic `thinking: { type: "enabled" }` block and require `compat.forceAdaptiveThinking: true`. Claude Haiku 4.5 works with classic thinking and does not set this flag.
+- **Newer Claude models need adaptive thinking:** Claude Sonnet 5, Opus 4.8, Opus 4.6, and Sonnet 4.6 reject the classic `thinking: { type: "enabled" }` block and require `compat.forceAdaptiveThinking: true`. Claude Haiku 4.5 works with classic thinking and does not set this flag.
 - **No vLLM workarounds:** Unlike the `pi-academiccloud` extension this is derived from, Langdock proxies real hosted backends (Azure OpenAI, Vertex Claude), so no custom streaming or tool-call parsing is needed — Pi's built-in `openai-completions` and `anthropic-messages` APIs are used directly.
 
 ## License

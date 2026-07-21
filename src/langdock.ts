@@ -171,6 +171,16 @@ export default function (pi: ExtensionAPI) {
     api: "anthropic-messages",
     models: [
       {
+        id: "claude-sonnet-5-default",
+        name: "Claude Sonnet 5",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: zeroCost,
+        contextWindow: 200000,
+        maxTokens: 32000,
+        compat: anthropicAdaptiveCompat,
+      },
+      {
         id: "claude-opus-4-8-default",
         name: "Claude Opus 4.8",
         reasoning: true,
